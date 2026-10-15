@@ -76,8 +76,8 @@ button{font:inherit;cursor:pointer}
 <div id="log"></div>
 <div id="pan2" hidden><div class="box"><h3>⚙️ IA – Groq</h3><p>Génie utilise Groq via un serveur sécurisé : aucune clé à saisir.</p>
 <label for="gn">Ton nom</label><input id="gn" type="text" placeholder="Boubacar Diallo" autocomplete="name">
-<label for="gm">Modèle (texte)</label><input id="gm" type="text" placeholder="llama-3.3-70b-versatile" autocapitalize="off" spellcheck="false">
-<label for="gv">Modèle (photos)</label><input id="gv" type="text" placeholder="meta-llama/llama-4-scout-17b-16e-instruct" autocapitalize="off" spellcheck="false">
+<label for="gm">Modèle (texte)</label><input id="gm" type="text" placeholder="openai/gpt-oss-120b" autocapitalize="off" spellcheck="false">
+<label for="gv">Modèle (photos)</label><input id="gv" type="text" placeholder="qwen/qwen3.8-27b" autocapitalize="off" spellcheck="false">
 <div class="row"><button class="ghost" id="cc">Fermer</button><button id="cs">Enregistrer</button></div></div></div>
 <div id="pan" hidden><div class="box"><h3>📁 Mes projets et infos</h3><p>Écris ici tes projets, ton école, tes objectifs… Génie s'en souviendra dans toutes tes discussions.</p><textarea id="mem" rows="10"></textarea><div class="row"><button class="ghost" id="mc">Fermer</button><button id="ms">Enregistrer</button></div></div></div>
 <div id="pend" hidden></div>
@@ -242,7 +242,11 @@ function greetTxt(){
 const GN='genie_name';
 const WORKER='https://genie.boubacardraga123.workers.dev';
 const GK='genie_groq_key',GM='genie_groq_model',GV='genie_groq_vmodel';
-const DEF_M='llama-3.3-70b-versatile',DEF_V='meta-llama/llama-4-scout-17b-16e-instruct';
+const DEF_M='openai/gpt-oss-120b',DEF_V='qwen/qwen3.8-27b';
+const FB_M=['openai/gpt-oss-120b','openai/gpt-oss-20b','qwen/qwen3.8-27b'],FB_V=['qwen/qwen3.8-27b'];
+/* anciens modèles retirés du plan gratuit : ignorés s'ils sont enregistrés dans ⚙️ */
+const OLD_M=/^(llama-3\.|llama3|meta-llama\/llama-4|mixtral|gemma)/i;
+function pickModel(k,d){const s=gget(k,'');return(s&&!OLD_M.test(s))?s:d}
 function gget(k,d){try{return(localStorage.getItem(k)||'').trim()||d}catch(e){return d}}
 function gset(k,v){try{if(v)localStorage.setItem(k,v);else localStorage.removeItem(k)}catch(e){}}
 const pan2=document.getElementById('pan2');
@@ -277,19 +281,24 @@ async function groqChat(messages,opt){
     const last=messages[messages.length-1];
     last.content=[{type:'text',text:last.content}].concat(urls.map(u=>({type:'image_url',image_url:{url:u}})));
   }
-  const model=ims.length?gget(GV,DEF_V):gget(GM,DEF_M);
-  let res;
-  try{
-    res=await fetch(WORKER,{
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({model:model,messages:messages,stream:true,temperature:.7,max_tokens:4096})
-    });
-  }catch(e){throw{code:'network'}}
-  if(!res.ok){
-    let msg='';try{msg=(await res.json()).error.message}catch(e){}
-    throw{code:res.status===401?'bad_key':res.status===429?'rate_limited':'http',msg:msg};
+  const first=ims.length?pickModel(GV,DEF_V):pickModel(GM,DEF_M);
+  const cands=[first].concat(ims.length?FB_V:FB_M).filter((m,i,arr)=>arr.indexOf(m)===i);
+  let res=null,lastErr=null;
+  for(let i=0;i<cands.length;i++){
+    let r;
+    try{
+      r=await fetch(WORKER,{
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({model:cands[i],messages:messages,stream:true,temperature:.7,max_tokens:4096})
+      });
+    }catch(e){throw{code:'network'}}
+    if(r.ok){res=r;break}
+    let msg='';try{msg=(await r.json()).error.message}catch(e){}
+    lastErr={code:r.status===401?'bad_key':r.status===429?'rate_limited':'http',msg:msg};
+    if(![400,403,404,429].includes(r.status))break;
   }
+  if(!res)throw lastErr;
   const rd=res.body.getReader(),dec=new TextDecoder();
   let buf='',text='';
   for(;;){
